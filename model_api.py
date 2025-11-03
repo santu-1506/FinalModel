@@ -105,26 +105,24 @@ def load_trained_model():
         # Use try-except to handle potential loading issues
         logger.info("Attempting to load model (this may take 2-3 minutes)...")
         logger.info("Using safe_mode=False for Lambda layers and memory optimization...")
-        
-        # Enable unsafe deserialization for Lambda layers (CRITICAL for Python version mismatch)
-        try:
-            import keras.config
-            keras.config.enable_unsafe_deserialization()
-            logger.info("✓ Unsafe deserialization enabled (for Lambda layers)")
-        except Exception as e:
-            logger.warning(f"Could not enable unsafe deserialization: {e}")
+
+        # Import keras from tensorflow HERE to fix the UnboundLocalError
+        from tensorflow import keras
+
+        # The 'keras.config' module does not exist in this older TF version.
+        # safe_mode=False is sufficient now that we use Python 3.8.
         
         # Enable mixed precision to reduce memory usage
         try:
-            from tensorflow.keras import mixed_precision
-            policy = mixed_precision.Policy('mixed_float16')
-            mixed_precision.set_global_policy(policy)
+            policy = keras.mixed_precision.Policy('mixed_float16')
+            keras.mixed_precision.set_global_policy(policy)
             logger.info("✓ Mixed precision enabled (float16) - 30-40% memory reduction")
         except Exception as e:
             logger.warning(f"Could not enable mixed precision: {e}")
         
         try:
-            # Load with safe_mode=False for Lambda layers, compile=False to reduce memory
+            # Load with safe_mode=False. This should be enough with Python 3.8
+            logger.info("Loading model with safe_mode=False...")
             model = keras.models.load_model(model_path, safe_mode=False, compile=False)
             logger.info("✓ Model loaded successfully (not compiled)")
             
