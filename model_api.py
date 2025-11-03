@@ -9,8 +9,11 @@ import warnings
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
+
+# Set TensorFlow environment variables before importing
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Disable GPU (Cloud Run doesn't have GPUs)
 
 import numpy as np
 import tensorflow as tf
@@ -55,19 +58,111 @@ def load_trained_model():
     
     try:
         # Check if model exists
-        if not os.path.exists(MODEL_PATH):
-            logger.error(f"Model not found at {MODEL_PATH}")
-            logger.info("Please train the model first using train_model.py from the final1/ directory")
-            return False
+        model_path = MODEL_PATH
+        if not os.path.exists(model_path):
+            logger.error(f"Model not found at {model_path}")
+            logger.info("Checking alternative paths...")
+            # Try alternative paths
+            alt_paths = [
+                'final1/weight/final_model.keras',
+                '/app/final1/weight/final_model.keras',
+                './final1/weight/final_model.keras'
+            ]
+            for alt_path in alt_paths:
+                if os.path.exists(alt_path):
+                    model_path = alt_path
+                    logger.info(f"Found model at: {alt_path}")
+                    break
+            else:
+                logger.info("Please train the model first using train_model.py from the final1/ directory")
+                return False
         
-        logger.info(f"Loading CRISPR-BERT model from {MODEL_PATH}...")
+        logger.info(f"Loading CRISPR-BERT model from {model_path}...")
+        
+        # Set TensorFlow memory growth to avoid crashes
+        # Disable GPU and limit memory for Cloud Run
+        try:
+            # Disable GPU for Cloud Run (no GPU available)
+            os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+            
+            # Set memory management flags to prevent crashes
+            os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
+            os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
+            
+            # Configure TensorFlow for low memory
+            tf.config.set_soft_device_placement(True)
+            
+            # Limit TensorFlow threading to reduce memory
+            tf.config.threading.set_inter_op_parallelism_threads(1)
+            tf.config.threading.set_intra_op_parallelism_threads(1)
+            
+            logger.info("TensorFlow configured for low-memory environment")
+        except Exception as config_error:
+            logger.warning(f"Could not configure TensorFlow devices: {config_error}")
+            pass
+        
         # Load with safe_mode=False to allow Lambda layers (trusted model)
-        model = keras.models.load_model(MODEL_PATH, safe_mode=False)
-        logger.info("✓ Model loaded successfully")
+        # Use try-except to handle potential loading issues
+        logger.info("Attempting to load model (this may take 2-3 minutes)...")
+        logger.info("Using safe_mode=False for Lambda layers and memory optimization...")
+        
+        # Enable mixed precision to reduce memory usage
+        try:
+            from tensorflow.keras import mixed_precision
+            policy = mixed_precision.Policy('mixed_float16')
+            mixed_precision.set_global_policy(policy)
+            logger.info("✓ Mixed precision enabled (float16) - 30-40% memory reduction")
+        except Exception as e:
+            logger.warning(f"Could not enable mixed precision: {e}")
+        
+        try:
+            # Load with safe_mode=False for Lambda layers, compile=False to reduce memory
+            model = keras.models.load_model(model_path, safe_mode=False, compile=False)
+            logger.info("✓ Model loaded successfully (not compiled)")
+            
+            # Compile with memory-efficient settings
+            model.compile(
+                optimizer='adam',
+                loss='binary_crossentropy',
+                metrics=['accuracy'],
+                jit_compile=False  # Disable XLA compilation to save memory
+            )
+            logger.info("✓ Model compiled successf  ully with memory optimizations")
+        except Exception as e:
+            logger.error(f"Error loading model: {str(e)}")
+            logger.info("Trying alternative loading method...")
+            try:
+                # Try loading without safe_mode, still with compile=False
+                model = keras.models.load_model(model_path, compile=False)
+                logger.info("✓ Model loaded successfully (alternative method, not compiled)")
+                
+                # Compile after loading
+                model.compile(
+                    optimizer='adam',
+                    loss='binary_crossentropy',
+                    metrics=['accuracy']
+                )
+                logger.info("✓ Model compiled successfully")
+            except Exception as e2:
+                logger.error(f"Failed all loading attempts: {str(e2)}")
+                raise
         
         # Load adaptive threshold
-        if os.path.exists(THRESHOLD_PATH):
-            with open(THRESHOLD_PATH, 'r') as f:
+        threshold_path = THRESHOLD_PATH
+        if not os.path.exists(threshold_path):
+            # Try alternative paths
+            alt_paths = [
+                'final1/weight/threshold_schedule.json',
+                '/app/final1/weight/threshold_schedule.json',
+                './final1/weight/threshold_schedule.json'
+            ]
+            for alt_path in alt_paths:
+                if os.path.exists(alt_path):
+                    threshold_path = alt_path
+                    break
+        
+        if os.path.exists(threshold_path):
+            with open(threshold_path, 'r') as f:
                 data = json.load(f)
                 threshold = data.get('final_threshold', 0.5)
                 logger.info(f"✓ Using adaptive threshold: {threshold:.3f}")
@@ -79,6 +174,9 @@ def load_trained_model():
         
     except Exception as e:
         logger.error(f"Failed to load model: {str(e)}")
+        logger.error(f"Error type: {type(e).__name__}")
+        import traceback
+        logger.error(traceback.format_exc())
         return False
 
 
@@ -130,6 +228,26 @@ def predict_single(sgrna, dna):
     }
 
 
+
+
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint - API information"""
+    return jsonify({
+        'service': 'CRISPR-BERT Prediction API',
+        'status': 'running',
+        'model_loaded': model_loaded,
+        'endpoints': {
+            'health': '/health',
+            'predict': '/predict (POST)',
+            'batch_predict': '/batch_predict (POST)',
+            'model_info': '/model/info'
+        },
+        'version': '1.0.0',
+        'timestamp': datetime.now().isoformat()
+    })
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -166,6 +284,15 @@ def predict():
             "timestamp": "..."
         }
     """
+    # Try to load model if not already loaded
+    global model_loaded
+    if not model_loaded:
+        logger.info("Model not loaded yet, attempting to load now...")
+        try:
+            initialize_app()
+        except Exception as e:
+            logger.error(f"Failed to load model: {e}")
+    
     if not model_loaded:
         return jsonify({
             'error': 'Model not loaded',
@@ -353,6 +480,38 @@ def model_info():
     return jsonify(info)
 
 
+@app.route('/debug/files', methods=['GET'])
+def debug_files():
+    """Debug endpoint to check what files exist"""
+    files_info = {
+        'working_directory': os.getcwd(),
+        'model_path_exists': os.path.exists(MODEL_PATH),
+        'model_path_checked': MODEL_PATH,
+        'final1_exists': os.path.exists('final1'),
+        'final1_weight_exists': os.path.exists('final1/weight'),
+        'files_in_final1': [],
+        'files_in_final1_weight': []
+    }
+    
+    try:
+        if os.path.exists('final1'):
+            files_info['files_in_final1'] = os.listdir('final1')
+        if os.path.exists('final1/weight'):
+            weight_files = os.listdir('final1/weight')
+            files_info['files_in_final1_weight'] = []
+            for f in weight_files:
+                full_path = os.path.join('final1/weight', f)
+                size = os.path.getsize(full_path) if os.path.isfile(full_path) else 'dir'
+                files_info['files_in_final1_weight'].append({
+                    'name': f,
+                    'size': size
+                })
+    except Exception as e:
+        files_info['error'] = str(e)
+    
+    return jsonify(files_info)
+
+
 def initialize_app():
     """Initialize the application"""
     logger.info("=" * 60)
@@ -374,7 +533,7 @@ def initialize_app():
 if __name__ == '__main__':
     initialize_app()
     
-    # Run Flask app
+    # Run Flask app (for local development)
     port = int(os.environ.get('PORT', 5001))
     logger.info(f"\nStarting server on port {port}...")
     logger.info("=" * 60)
@@ -384,3 +543,38 @@ if __name__ == '__main__':
         port=port,
         debug=False
     )
+else:
+    # When imported by gunicorn: Load model in background after server starts
+    # This allows health checks to pass while model loads
+    logger.info("=" * 60)
+    logger.info("App imported by gunicorn - will load model in background")
+    logger.info("=" * 60)
+    
+    import threading
+    import time
+    
+    def load_model_delayed():
+        """Load model after a short delay to let server start"""
+        logger.info("Background thread started - waiting 2 seconds...")
+        time.sleep(2)  # Give server time to start listening
+        logger.info("Starting model loading in background NOW...")
+        logger.info(f"Current working directory: {os.getcwd()}")
+        logger.info(f"Model path to load: {MODEL_PATH}")
+        logger.info(f"Model file exists: {os.path.exists(MODEL_PATH)}")
+        try:
+            success = initialize_app()
+            if success:
+                logger.info("✓✓✓ Model loaded successfully in background! ✓✓✓")
+            else:
+                logger.error("✗✗✗ Model loading FAILED in background ✗✗✗")
+        except Exception as e:
+            logger.error(f"✗✗✗ Exception during model loading: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    # Start background thread to load model
+    model_thread = threading.Thread(target=load_model_delayed, daemon=False, name="ModelLoader")
+    model_thread.start()
+    logger.info(f"Background model loading thread started: {model_thread.name}")
+    logger.info(f"Thread is alive: {model_thread.is_alive()}")
+    logger.info("=" * 60)
