@@ -44,12 +44,24 @@ CORS(app)
 
 # Global model and configuration
 model = None
+# Define paths for both model formats
+MODEL_PATH_H5 = "final1/weight/final_model_compatible.h5"
+MODEL_PATH_KERAS = "final1/weight/final_model.keras"
+
+# Prioritize the new, compatible .h5 model if it exists
+if os.path.exists(MODEL_PATH_H5):
+    MODEL_PATH = MODEL_PATH_H5
+    logger.info(f"✅ Found compatible model '{MODEL_PATH_H5}'. Using it for deployment.")
+else:
+    MODEL_PATH = MODEL_PATH_KERAS
+    logger.warning(f"⚠️ Compatible .h5 model not found. Falling back to '{MODEL_PATH_KERAS}'.")
+    logger.warning("   This may cause errors. Please run 'resave_to_h5.py' in your training environment.")
+
 threshold = 0.5
 model_loaded = False
 
 # Configuration
-MODEL_PATH = 'final1/weight/final_model.keras'
-THRESHOLD_PATH = 'final1/weight/threshold_schedule.json'
+THRESHOLD_PATH = 'final1/weight/threshold.npy'
 
 
 def load_trained_model():
@@ -101,11 +113,6 @@ def load_trained_model():
             logger.warning(f"Could not configure TensorFlow devices: {config_error}")
             pass
         
-        # Load with safe_mode=False to allow Lambda layers (trusted model)
-        # Use try-except to handle potential loading issues
-        logger.info("Attempting to load model (this may take 2-3 minutes)...")
-        logger.info("Using safe_mode=False for Lambda layers and memory optimization...")
-
         # Import keras from tensorflow HERE to fix the UnboundLocalError
         from tensorflow import keras
 
@@ -121,37 +128,18 @@ def load_trained_model():
             logger.warning(f"Could not enable mixed precision: {e}")
         
         try:
-            # Load with safe_mode=False. This should be enough with Python 3.8
-            logger.info("Loading model with safe_mode=False...")
-            model = keras.models.load_model(model_path, safe_mode=False, compile=False)
+            # With the .h5 file and a matched Python 3.8 env, this should just work.
+            model = keras.models.load_model(model_path, compile=False)
             logger.info("✓ Model loaded successfully (not compiled)")
-            
-            # Compile with memory-efficient settings
-            model.compile(
-                optimizer='adam',
-                loss='binary_crossentropy',
-                metrics=['accuracy'],
-                jit_compile=False  # Disable XLA compilation to save memory
-            )
-            logger.info("✓ Model compiled successf  ully with memory optimizations")
         except Exception as e:
-            logger.error(f"Error loading model: {str(e)}")
-            logger.info("Trying alternative loading method...")
-            try:
-                # Try loading without safe_mode, still with compile=False
-                model = keras.models.load_model(model_path, compile=False)
-                logger.info("✓ Model loaded successfully (alternative method, not compiled)")
-                
-                # Compile after loading
-                model.compile(
-                    optimizer='adam',
-                    loss='binary_crossentropy',
-                    metrics=['accuracy']
-                )
-                logger.info("✓ Model compiled successfully")
-            except Exception as e2:
-                logger.error(f"Failed all loading attempts: {str(e2)}")
-                raise
+            logger.error(f"❌ Error loading model: {e}")
+            logger.error("   This is the final error point. If you see this, it means:")
+            logger.error("   1. You are not using the compatible .h5 model file.")
+            logger.error("   2. The Python or TensorFlow versions are still mismatched.")
+            logger.error("   Please ensure you have run 'resave_to_h5.py' and are using the Python 3.8 environment.")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
         
         # Load adaptive threshold
         threshold_path = THRESHOLD_PATH
