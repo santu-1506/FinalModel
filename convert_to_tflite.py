@@ -30,8 +30,9 @@ print(f"\n📦 Original model: {original_size_mb:.2f} MB")
 
 # Step 1: Load Keras model
 print("\n1️⃣  Loading Keras model...")
+print("   (Using safe_mode=False for Lambda layers)")
 try:
-    model = keras.models.load_model(KERAS_MODEL_PATH, compile=False)
+    model = keras.models.load_model(KERAS_MODEL_PATH, compile=False, safe_mode=False)
     print(f"   ✓ Model loaded successfully")
     print(f"   ✓ Input shapes: {[str(inp.shape) for inp in model.inputs]}")
     print(f"   ✓ Output shape: {model.output.shape}")
