@@ -15,36 +15,44 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Disable GPU (Cloud Run doesn't have GPUs)
 
+import logging
+# ==============================================================================
+# CONFIGURE LOGGER FIRST
+# This is critical to ensure that any import errors or early failures are logged.
+# ==============================================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+logger.info("Logger configured. Starting application imports...")
+
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
-import logging
 from datetime import datetime
+import threading
+import time
 
-# CRISPR-BERT imports
-from sequence_encoder import encode_for_cnn, encode_for_bert
-from data_loader import load_dataset
-# Import the function that builds the model architecture
+# Now, import project-specific modules
 try:
+    from sequence_encoder import encode_for_cnn, encode_for_bert
+    from data_loader import load_dataset
     from final1.train_model import build_crispr_bert_model
-    logger.info("Successfully imported build_crispr_bert_model.")
+    logger.info("Successfully imported all model definition modules.")
 except ImportError as e:
-    logger.error(f"Could not import build_crispr_bert_model: {e}")
-    logger.error("Please ensure train_model.py and other model definition files are in the 'final1' directory.")
+    logger.error(f"CRITICAL STARTUP ERROR: Could not import a required module: {e}")
+    logger.error("This is likely due to a missing file in the Docker image or a Python path issue.")
+    logger.error("Please ensure 'sequence_encoder.py', 'data_loader.py', and the 'final1' package are correctly copied in the Dockerfile.")
+    # Set a flag or exit if the build function is not available
     build_crispr_bert_model = None
 
 # Suppress TensorFlow warnings
 tf.get_logger().setLevel('ERROR')
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = Flask(__name__)
