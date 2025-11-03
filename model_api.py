@@ -27,6 +27,14 @@ from datetime import datetime
 # CRISPR-BERT imports
 from sequence_encoder import encode_for_cnn, encode_for_bert
 from data_loader import load_dataset
+# Import the function that builds the model architecture
+try:
+    from final1.train_model import build_crispr_bert_model
+    logger.info("Successfully imported build_crispr_bert_model.")
+except ImportError as e:
+    logger.error(f"Could not import build_crispr_bert_model: {e}")
+    logger.error("Please ensure train_model.py and other model definition files are in the 'final1' directory.")
+    build_crispr_bert_model = None
 
 # Suppress TensorFlow warnings
 tf.get_logger().setLevel('ERROR')
@@ -44,18 +52,9 @@ CORS(app)
 
 # Global model and configuration
 model = None
-# Define paths for both model formats
+# Define paths for the weights file. We ONLY use the .h5 file now.
 MODEL_PATH_H5 = "final1/weight/final_model_compatible.h5"
-MODEL_PATH_KERAS = "final1/weight/final_model.keras"
-
-# Prioritize the new, compatible .h5 model if it exists
-if os.path.exists(MODEL_PATH_H5):
-    MODEL_PATH = MODEL_PATH_H5
-    logger.info(f"✅ Found compatible model '{MODEL_PATH_H5}'. Using it for deployment.")
-else:
-    MODEL_PATH = MODEL_PATH_KERAS
-    logger.warning(f"⚠️ Compatible .h5 model not found. Falling back to '{MODEL_PATH_KERAS}'.")
-    logger.warning("   This may cause errors. Please run 'resave_to_h5.py' in your training environment.")
+MODEL_PATH = MODEL_PATH_H5 # Set the primary path to the .h5 file
 
 threshold = 0.5
 model_loaded = False
@@ -65,109 +64,63 @@ THRESHOLD_PATH = 'final1/weight/threshold.npy'
 
 
 def load_trained_model():
-    """Load the trained CRISPR-BERT model"""
+    """
+    Load the trained CRISPR-BERT model by rebuilding the architecture
+    from source and loading weights from the .h5 file.
+    """
     global model, threshold, model_loaded
     
+    if build_crispr_bert_model is None:
+        logger.error("Cannot load model because build_crispr_bert_model function is not available.")
+        return False
+
     try:
-        # Check if model exists
-        model_path = MODEL_PATH
-        if not os.path.exists(model_path):
-            logger.error(f"Model not found at {model_path}")
-            logger.info("Checking alternative paths...")
-            # Try alternative paths
-            alt_paths = [
-                'final1/weight/final_model.keras',
-                '/app/final1/weight/final_model.keras',
-                './final1/weight/final_model.keras'
-            ]
-            for alt_path in alt_paths:
-                if os.path.exists(alt_path):
-                    model_path = alt_path
-                    logger.info(f"Found model at: {alt_path}")
-                    break
-            else:
-                logger.info("Please train the model first using train_model.py from the final1/ directory")
-                return False
+        # Check if weights file exists
+        weights_path = MODEL_PATH
+        if not os.path.exists(weights_path):
+            logger.error(f"Model weights file not found at {weights_path}")
+            return False
         
-        logger.info(f"Loading CRISPR-BERT model from {model_path}...")
-        
-        # Set TensorFlow memory growth to avoid crashes
-        # Disable GPU and limit memory for Cloud Run
+        logger.info("=" * 60)
+        logger.info("STEP 1: Building model architecture from source code...")
+        # Re-create the model architecture programmatically
+        model = build_crispr_bert_model()
+        logger.info("✓ Model architecture created successfully.")
+        model.summary(print_fn=logger.info)
+        logger.info("=" * 60)
+
+        # Configure TensorFlow for low memory BEFORE loading weights
         try:
-            # Disable GPU for Cloud Run (no GPU available)
             os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-            
-            # Set memory management flags to prevent crashes
-            os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
-            os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
-            
-            # Configure TensorFlow for low memory
-            tf.config.set_soft_device_placement(True)
-            
-            # Limit TensorFlow threading to reduce memory
             tf.config.threading.set_inter_op_parallelism_threads(1)
             tf.config.threading.set_intra_op_parallelism_threads(1)
-            
-            logger.info("TensorFlow configured for low-memory environment")
+            logger.info("✓ TensorFlow configured for low-memory environment")
         except Exception as config_error:
             logger.warning(f"Could not configure TensorFlow devices: {config_error}")
-            pass
-        
-        # Import keras from tensorflow HERE to fix the UnboundLocalError
-        from tensorflow import keras
 
-        # The 'keras.config' module does not exist in this older TF version.
-        # safe_mode=False is sufficient now that we use Python 3.8.
-        
-        # Enable mixed precision to reduce memory usage
-        try:
-            policy = keras.mixed_precision.Policy('mixed_float16')
-            keras.mixed_precision.set_global_policy(policy)
-            logger.info("✓ Mixed precision enabled (float16) - 30-40% memory reduction")
-        except Exception as e:
-            logger.warning(f"Could not enable mixed precision: {e}")
-        
-        try:
-            # With the .h5 file and a matched Python 3.8 env, this should just work.
-            model = keras.models.load_model(model_path, compile=False)
-            logger.info("✓ Model loaded successfully (not compiled)")
-        except Exception as e:
-            logger.error(f"❌ Error loading model: {e}")
-            logger.error("   This is the final error point. If you see this, it means:")
-            logger.error("   1. You are not using the compatible .h5 model file.")
-            logger.error("   2. The Python or TensorFlow versions are still mismatched.")
-            logger.error("   Please ensure you have run 'resave_to_h5.py' and are using the Python 3.8 environment.")
-            import traceback
-            logger.error(traceback.format_exc())
-            return None
+        logger.info("=" * 60)
+        logger.info(f"STEP 2: Loading weights from '{weights_path}'...")
+        # Load ONLY the weights into the fresh model architecture
+        model.load_weights(weights_path)
+        logger.info("✓✓✓ Model weights loaded successfully! ✓✓✓")
+        logger.info("=" * 60)
         
         # Load adaptive threshold
         threshold_path = THRESHOLD_PATH
-        if not os.path.exists(threshold_path):
-            # Try alternative paths
-            alt_paths = [
-                'final1/weight/threshold_schedule.json',
-                '/app/final1/weight/threshold_schedule.json',
-                './final1/weight/threshold_schedule.json'
-            ]
-            for alt_path in alt_paths:
-                if os.path.exists(alt_path):
-                    threshold_path = alt_path
-                    break
-        
         if os.path.exists(threshold_path):
             with open(threshold_path, 'r') as f:
                 data = json.load(f)
                 threshold = data.get('final_threshold', 0.5)
                 logger.info(f"✓ Using adaptive threshold: {threshold:.3f}")
         else:
-            logger.info("Using default threshold: 0.5")
+            logger.warning(f"Threshold file not found at {threshold_path}. Using default 0.5.")
+            threshold = 0.5
         
         model_loaded = True
         return True
         
     except Exception as e:
-        logger.error(f"Failed to load model: {str(e)}")
+        logger.error(f"❌❌❌ FINAL ERROR: Failed to load model with new method: {str(e)}")
         logger.error(f"Error type: {type(e).__name__}")
         import traceback
         logger.error(traceback.format_exc())
