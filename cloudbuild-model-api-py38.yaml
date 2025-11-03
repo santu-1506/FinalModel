@@ -1,0 +1,24 @@
+# Cloud Build config for Python 3.8 Keras Model API
+# This configuration correctly specifies the Dockerfile to use.
+
+steps:
+  # Build the Python 3.8 Model API Docker image
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "gcr.io/$PROJECT_ID/crispr-model-api-py38:latest"
+      # This is how we correctly specify the Dockerfile name
+      - "-f"
+      - "Dockerfile.python38"
+      - "."
+    timeout: 1800s  # 30 minutes
+
+images:
+  - "gcr.io/$PROJECT_ID/crispr-model-api-py38:latest"
+
+options:
+  machineType: "N1_HIGHCPU_8"
+  diskSizeGb: 100
+
+timeout: 1800s
