@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir tensorflow-cpu>=2.15.0,<3.0.0 && \
+    pip install --no-cache-dir "tensorflow-cpu>=2.15.0,<3.0.0" && \
     pip install --no-cache-dir flask flask-cors gunicorn numpy
 
 # Copy model files and conversion script
