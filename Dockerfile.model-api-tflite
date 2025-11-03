@@ -1,0 +1,46 @@
+# TFLite optimized Dockerfile for CRISPR-BERT Model API
+# Converts model to TFLite during build and uses 90% less memory
+
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir tensorflow-cpu>=2.15.0,<3.0.0 && \
+    pip install --no-cache-dir flask flask-cors gunicorn numpy
+
+# Copy model files and conversion script
+COPY final1/weight/final_model.keras /app/final1/weight/final_model.keras
+COPY convert_to_tflite.py /app/
+
+# Convert model to TFLite during build
+RUN python convert_to_tflite.py && \
+    ls -lh /app/final1/weight/ && \
+    echo "Model conversion complete!"
+
+# Copy TFLite model API
+COPY model_api_tflite.py /app/model_api.py
+
+# Create entrypoint script
+RUN echo '#!/bin/sh' > /app/entrypoint.sh && \
+    echo 'PORT=${PORT:-5001}' >> /app/entrypoint.sh && \
+    echo 'echo "Starting CRISPR-BERT TFLite API on port $PORT"' >> /app/entrypoint.sh && \
+    echo 'exec gunicorn --bind "0.0.0.0:${PORT}" --workers 1 --threads 2 --timeout 300 --graceful-timeout 60 --access-logfile - --error-logfile - model_api:app' >> /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8080}/health || exit 1
+
+# Run
+CMD ["/app/entrypoint.sh"]

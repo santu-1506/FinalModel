@@ -2,8 +2,8 @@
 numpy>=1.24.0,<2.0.0
 pandas>=2.0.0
 
-# Deep Learning Framework
-tensorflow>=2.15.0,<3.0.0
+# Deep Learning Framework (CPU-only for lower memory usage)
+tensorflow-cpu>=2.15.0,<3.0.0
 
 # Machine Learning
 scikit-learn>=1.3.0
@@ -13,11 +13,8 @@ Flask>=3.0.0
 Flask-CORS>=4.0.0
 Werkzeug>=3.0.0
 
-# Production Server
+# Production Server (optional for HF Spaces, but good to have)
 gunicorn>=21.0.0
 
 # Optional: For visualization (if needed)
 matplotlib>=3.7.0
-
-# Optional: For SHAP analysis (if needed for model interpretability)
-# shap>=0.42.0
