@@ -24,6 +24,8 @@ COPY bert_model.py /app/bert_model.py
 COPY cnn_model.py /app/cnn_model.py
 COPY crispr_bert.py /app/crispr_bert.py
 COPY data_loader.py /app/data_loader.py
+COPY final1/train_model.py ./final1/
+COPY final1/__init__.py ./final1/
 COPY sequence_encoder.py /app/sequence_encoder.py
 
 # Copy model API
