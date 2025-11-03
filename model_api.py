@@ -106,6 +106,14 @@ def load_trained_model():
         logger.info("Attempting to load model (this may take 2-3 minutes)...")
         logger.info("Using safe_mode=False for Lambda layers and memory optimization...")
         
+        # Enable unsafe deserialization for Lambda layers (CRITICAL for Python version mismatch)
+        try:
+            import keras.config
+            keras.config.enable_unsafe_deserialization()
+            logger.info("✓ Unsafe deserialization enabled (for Lambda layers)")
+        except Exception as e:
+            logger.warning(f"Could not enable unsafe deserialization: {e}")
+        
         # Enable mixed precision to reduce memory usage
         try:
             from tensorflow.keras import mixed_precision
